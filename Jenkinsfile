@@ -1,4 +1,4 @@
-// LAB 1: Docker integration + quality gate + smoke test
+// LAB 2: + pipeline options, post actions, notifications (uses the stored credential)
 def deploy(String name, int port, String image, boolean bad) {
     def version = image.tokenize(':')[1]
     sh "docker rm -f ${name} || true"
@@ -17,8 +17,23 @@ def smoke(String host) {
     }
 }
 
+def notifyTeam(String status) {
+    def msg = "ShopEase order-service | ${status} | build #${env.BUILD_NUMBER} | ${env.BUILD_URL}"
+    writeFile file: 'notify.json', text: '{"text": "' + msg + '"}'
+    withCredentials([string(credentialsId: 'notify-token', variable: 'NOTIFY_TOKEN')]) {
+        sh 'curl -sS -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $NOTIFY_TOKEN" --data @notify.json http://notify-receiver:9000/ || true'
+    }
+}
+
 pipeline {
     agent any
+
+    options {
+        timestamps()
+        timeout(time: 20, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        disableConcurrentBuilds()
+    }
 
     environment {
         IMAGE = "shopease/order-service:${BUILD_NUMBER}"
@@ -32,10 +47,22 @@ pipeline {
             steps { sh 'docker build --target runtime -t $IMAGE .' }
         }
         stage('Deploy to Staging') {
-            steps { script { deploy('shopease-staging', 8081, env.IMAGE, false) } }
+            steps { script { deploy('shopease-staging', 8083, env.IMAGE, false) } }
         }
         stage('Smoke Test Staging') {
             steps { script { smoke('shopease-staging') } }
         }
+    }
+
+    post {
+        always {
+            sh 'echo "build=$BUILD_NUMBER image=$IMAGE commit=$(git rev-parse --short HEAD)" > build-report.txt'
+            archiveArtifacts artifacts: 'build-report.txt', allowEmptyArchive: true
+            sh 'docker image prune -f || true'
+        }
+        success { script { notifyTeam('SUCCESS') } }
+        failure { script { notifyTeam('FAILED') } }
+        aborted { script { notifyTeam('ABORTED') } }
+        cleanup { cleanWs() }
     }
 }

@@ -1,4 +1,4 @@
-// LAB 2: + pipeline options, post actions, notifications (uses the stored credential)
+// LAB 3: + manual approval and production deploy
 def deploy(String name, int port, String image, boolean bad) {
     def version = image.tokenize(':')[1]
     sh "docker rm -f ${name} || true"
@@ -52,6 +52,19 @@ pipeline {
         stage('Smoke Test Staging') {
             steps { script { smoke('shopease-staging') } }
         }
+        stage('Approval') {
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    input message: 'Deploy build #' + env.BUILD_NUMBER + ' to PRODUCTION?', ok: 'Deploy', submitter: 'admin'
+                }
+            }
+        }
+        stage('Deploy to Production') {
+            steps { script { deploy('shopease-prod', 8082, env.IMAGE, false) } }
+        }
+        stage('Verify Production') {
+            steps { script { smoke('shopease-prod') } }
+        }
     }
 
     post {
@@ -62,7 +75,7 @@ pipeline {
         }
         success { script { notifyTeam('SUCCESS') } }
         failure { script { notifyTeam('FAILED') } }
-        aborted { script { notifyTeam('ABORTED') } }
+        aborted { script { notifyTeam('ABORTED - not approved') } }
         cleanup { cleanWs() }
     }
 }
